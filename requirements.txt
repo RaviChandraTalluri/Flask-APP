@@ -16,3 +16,5 @@ matplotlib
 scikit-learn
 statsmodels
 python-dateutil
+flask-limiter
+redis
