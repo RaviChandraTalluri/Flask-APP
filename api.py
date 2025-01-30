@@ -69,8 +69,8 @@ def add_security_headers(response):
     response.headers['Access-Control-Allow-Headers'] = 'Content-Type, Authorization, Accept'
     return response
 
-# Add Redis configuration after app initialization
-REDIS_URL = "redis://localhost:6379/0"  # Update this with your Redis server URL
+# Update Redis configuration for Render
+REDIS_URL = os.getenv('REDIS_URL', "redis://localhost:6379/0")
 redis_client = redis.from_url(REDIS_URL)
 
 # Update the limiter configuration
@@ -399,9 +399,4 @@ def test_analysis():
     return jsonify(sample_data)
 
 if __name__ == '__main__':
-    app.run(
-        debug=False,  # Set to False in production
-        host='0.0.0.0',
-        port=8000,
-        threaded=True  # Enable threading for better performance
-    ) 
+    app.run() 
