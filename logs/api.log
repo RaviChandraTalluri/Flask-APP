@@ -1,0 +1,70 @@
+2025-01-31 20:29:39,361 INFO: API startup [in /home/ec2-user/Flask-APP/api.py:54]
+2025-01-31 20:31:14,261 INFO: API startup [in /home/ec2-user/Flask-APP/api.py:54]
+2025-01-31 20:31:45,336 INFO: API startup [in /home/ec2-user/Flask-APP/api.py:54]
+2025-01-31 20:32:34,772 ERROR: Exception on / [GET] [in /usr/local/lib/python3.9/site-packages/flask/app.py:875]
+Traceback (most recent call last):
+  File "/usr/local/lib/python3.9/site-packages/redis/connection.py", line 357, in connect
+    sock = self.retry.call_with_retry(
+  File "/usr/local/lib/python3.9/site-packages/redis/retry.py", line 62, in call_with_retry
+    return do()
+  File "/usr/local/lib/python3.9/site-packages/redis/connection.py", line 358, in <lambda>
+    lambda: self._connect(), lambda error: self.disconnect(error)
+  File "/usr/local/lib/python3.9/site-packages/redis/connection.py", line 730, in _connect
+    raise err
+  File "/usr/local/lib/python3.9/site-packages/redis/connection.py", line 718, in _connect
+    sock.connect(socket_address)
+ConnectionRefusedError: [Errno 111] Connection refused
+
+During handling of the above exception, another exception occurred:
+
+Traceback (most recent call last):
+  File "/usr/local/lib/python3.9/site-packages/flask/app.py", line 1511, in wsgi_app
+    response = self.full_dispatch_request()
+  File "/usr/local/lib/python3.9/site-packages/flask/app.py", line 919, in full_dispatch_request
+    rv = self.handle_user_exception(e)
+  File "/usr/local/lib/python3.9/site-packages/flask_cors/extension.py", line 194, in wrapped_function
+    return cors_after_request(app.make_response(f(*args, **kwargs)))
+  File "/usr/local/lib/python3.9/site-packages/flask/app.py", line 917, in full_dispatch_request
+    rv = self.dispatch_request()
+  File "/usr/local/lib/python3.9/site-packages/flask/app.py", line 902, in dispatch_request
+    return self.ensure_sync(self.view_functions[rule.endpoint])(**view_args)  # type: ignore[no-any-return]
+  File "/usr/local/lib/python3.9/site-packages/flask_limiter/extension.py", line 1293, in __inner
+    self.limiter._check_request_limit(
+  File "/usr/local/lib/python3.9/site-packages/flask_limiter/extension.py", line 1170, in _check_request_limit
+    raise e
+  File "/usr/local/lib/python3.9/site-packages/flask_limiter/extension.py", line 1152, in _check_request_limit
+    self.__evaluate_limits(endpoint, all_limits)
+  File "/usr/local/lib/python3.9/site-packages/flask_limiter/extension.py", line 1089, in __evaluate_limits
+    if not method(lim.limit, *args, **kwargs):
+  File "/usr/local/lib/python3.9/site-packages/limits/strategies.py", line 140, in hit
+    self.storage.incr(
+  File "/usr/local/lib/python3.9/site-packages/limits/storage/base.py", line 27, in inner
+    return fn(*args, **kwargs)
+  File "/usr/local/lib/python3.9/site-packages/limits/storage/redis.py", line 210, in incr
+    return int(self.lua_incr_expire([key], [expiry, amount]))
+  File "/usr/local/lib/python3.9/site-packages/redis/commands/core.py", line 5501, in __call__
+    return client.evalsha(self.sha, len(keys), *args)
+  File "/usr/local/lib/python3.9/site-packages/redis/commands/core.py", line 5710, in evalsha
+    return self._evalsha("EVALSHA", sha, numkeys, *keys_and_args)
+  File "/usr/local/lib/python3.9/site-packages/redis/commands/core.py", line 5694, in _evalsha
+    return self.execute_command(command, sha, numkeys, *keys_and_args)
+  File "/usr/local/lib/python3.9/site-packages/redis/client.py", line 559, in execute_command
+    return self._execute_command(*args, **options)
+  File "/usr/local/lib/python3.9/site-packages/redis/client.py", line 565, in _execute_command
+    conn = self.connection or pool.get_connection(command_name, **options)
+  File "/usr/local/lib/python3.9/site-packages/redis/connection.py", line 1422, in get_connection
+    connection.connect()
+  File "/usr/local/lib/python3.9/site-packages/redis/connection.py", line 363, in connect
+    raise ConnectionError(self._error_message(e))
+redis.exceptions.ConnectionError: Error 111 connecting to localhost:6379. Connection refused.
+2025-01-31 20:33:34,249 INFO: API startup [in /home/ec2-user/Flask-APP/api.py:54]
+2025-01-31 20:36:59,562 INFO: API startup [in /home/ec2-user/Flask-APP/api.py:55]
+2025-01-31 20:36:59,565 INFO: Starting Flask server... [in /home/ec2-user/Flask-APP/api.py:557]
+2025-01-31 20:37:00,915 INFO: API startup [in /home/ec2-user/Flask-APP/api.py:55]
+2025-01-31 20:37:00,919 INFO: Starting Flask server... [in /home/ec2-user/Flask-APP/api.py:557]
+2025-01-31 20:41:00,462 INFO: API startup [in /home/ec2-user/Flask-APP/api.py:55]
+2025-01-31 20:41:00,479 INFO: API startup [in /home/ec2-user/Flask-APP/api.py:55]
+2025-01-31 20:41:00,512 INFO: API startup [in /home/ec2-user/Flask-APP/api.py:55]
+2025-01-31 20:43:36,963 INFO: API startup [in /home/ec2-user/Flask-APP/api.py:55]
+2025-01-31 20:43:36,979 INFO: API startup [in /home/ec2-user/Flask-APP/api.py:55]
+2025-01-31 20:44:05,035 INFO: API startup [in /home/ec2-user/Flask-APP/api.py:55]

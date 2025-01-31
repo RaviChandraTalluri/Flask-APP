@@ -22,8 +22,8 @@ from logging.handlers import RotatingFileHandler
 import json
 from flask_limiter import Limiter
 from flask_limiter.util import get_remote_address
-from flask_limiter.storage import RedisStorage
 import redis
+from io import StringIO
 
 app = Flask(__name__, static_folder='static')
 CORS(app, resources={
@@ -69,16 +69,24 @@ def add_security_headers(response):
     response.headers['Access-Control-Allow-Headers'] = 'Content-Type, Authorization, Accept'
     return response
 
-# Update Redis configuration for Render
-REDIS_URL = os.getenv('REDIS_URL', "redis://localhost:6379/0")
-redis_client = redis.from_url(REDIS_URL)
+# Update Redis configuration with fallback to in-memory storage
+REDIS_URL = os.getenv('REDIS_URL', None)
+try:
+    if REDIS_URL:
+        redis_client = redis.from_url(REDIS_URL)
+        storage_uri = REDIS_URL
+    else:
+        storage_uri = "memory://"
+        redis_client = None
+except:
+    storage_uri = "memory://"
+    redis_client = None
 
-# Update the limiter configuration
+# Update the limiter configuration to use memory storage if Redis is unavailable
 limiter = Limiter(
     app=app,
     key_func=get_remote_address,
-    storage_uri=REDIS_URL,
-    storage_options={"connection_pool": redis_client.connection_pool},
+    storage_uri=storage_uri,
     default_limits=["200 per day", "50 per hour"]
 )
 
@@ -346,8 +354,14 @@ def health_check():
         return '', 204
         
     try:
-        # Check Redis connection
-        redis_client.ping()
+        # Check Redis connection only if configured
+        redis_status = 'not configured'
+        if redis_client:
+            try:
+                redis_client.ping()
+                redis_status = 'ok'
+            except:
+                redis_status = 'error'
         
         # Check if upload directory exists and is writable
         if not os.path.exists(app.config['UPLOAD_FOLDER']):
@@ -363,17 +377,10 @@ def health_check():
             'status': 'healthy',
             'upload_dir': 'ok',
             'matplotlib': 'ok',
-            'redis': 'ok',
+            'redis': redis_status,
             'version': '1.0',
             'timestamp': datetime.now().isoformat()
         })
-    except redis.ConnectionError as e:
-        app.logger.error(f'Redis connection failed: {str(e)}')
-        return jsonify({
-            'status': 'error',
-            'message': 'Redis connection failed',
-            'timestamp': datetime.now().isoformat()
-        }), 500
     except Exception as e:
         app.logger.error(f'Health check failed: {str(e)}', exc_info=True)
         return jsonify({
@@ -398,5 +405,154 @@ def test_analysis():
     ]
     return jsonify(sample_data)
 
+@app.route('/test-full-analysis', methods=['GET'])
+def test_full_analysis():
+    try:
+        # Create sample CSV data
+        sample_data = """date,value,category
+2023-01-01,100,A
+2023-02-01,120,B
+2023-03-01,110,A
+2023-04-01,130,B
+2023-05-01,125,A
+2023-06-01,140,B
+2023-07-01,135,A
+2023-08-01,150,B
+2023-09-01,145,A
+2023-10-01,160,B"""
+
+        # Save sample data to temporary file
+        temp_file = os.path.join(app.config['UPLOAD_FOLDER'], 'test_data.csv')
+        with open(temp_file, 'w') as f:
+            f.write(sample_data)
+
+        try:
+            # Load and verify data
+            df = load_data(temp_file)
+            if df is None:
+                return jsonify({'error': 'Failed to load test data'}), 500
+
+            # Process data and generate results
+            results = []
+            
+            # Basic data summary
+            df_info = StringIO()
+            df.info(buf=df_info)
+            summary_stats = df.describe().to_dict()
+            missing_values = df.isnull().sum().to_dict()
+            
+            results.append({
+                'title': 'Dataset Overview',
+                'insights': [
+                    f"Dataset contains {len(df)} rows and {len(df.columns)} columns",
+                    f"Column Information:\n{df_info.getvalue()}",
+                    f"Missing Values: {json.dumps(missing_values, indent=2)}"
+                ]
+            })
+
+            # Data Distribution
+            plt.figure(figsize=(12, 6))
+            df['value'].hist(bins=30, color='blue', alpha=0.7)
+            plt.title("Distribution of Values")
+            results.append({
+                'title': 'Distribution Analysis',
+                'visualization': fig_to_base64(plt.gcf()),
+                'insights': ["Sample distribution analysis of values"]
+            })
+            plt.close()
+
+            # Time Series Analysis
+            df['date'] = pd.to_datetime(df['date'])
+            plt.figure(figsize=(12, 6))
+            plt.plot(df['date'], df['value'])
+            plt.title("Time Series Plot")
+            plt.xticks(rotation=45)
+            results.append({
+                'title': 'Time Series Analysis',
+                'visualization': fig_to_base64(plt.gcf()),
+                'insights': ["Sample time series analysis"]
+            })
+            plt.close()
+
+            # Classification Analysis
+            label_enc = LabelEncoder()
+            df['category_encoded'] = label_enc.fit_transform(df['category'])
+            features = df[['value']].values
+            target = df['category_encoded'].values
+            
+            X_train, X_test, y_train, y_test = train_test_split(features, target, test_size=0.3, random_state=42)
+            model = RandomForestClassifier(n_estimators=10)
+            model.fit(X_train, y_train)
+            y_pred = model.predict(X_test)
+            
+            results.append({
+                'title': 'Classification Analysis',
+                'insights': [
+                    f"Model Accuracy: {accuracy_score(y_test, y_pred):.2f}",
+                    "Sample classification analysis"
+                ]
+            })
+
+            return jsonify({
+                'status': 'success',
+                'message': 'Test analysis completed successfully',
+                'results': results
+            })
+
+        except Exception as e:
+            app.logger.error(f'Error in test analysis: {str(e)}', exc_info=True)
+            return jsonify({
+                'status': 'error',
+                'message': f'Analysis error: {str(e)}'
+            }), 500
+
+        finally:
+            # Clean up
+            if os.path.exists(temp_file):
+                os.remove(temp_file)
+
+    except Exception as e:
+        app.logger.error(f'Test analysis failed: {str(e)}', exc_info=True)
+        return jsonify({
+            'status': 'error',
+            'message': str(e)
+        }), 500
+
+@app.route('/verify-analysis', methods=['GET'])
+def verify_analysis():
+    try:
+        # Test data loading
+        sample_df = pd.DataFrame({
+            'A': [1, 2, 3],
+            'B': [4, 5, 6]
+        })
+        
+        # Test plotting
+        plt.figure()
+        plt.plot([1, 2, 3], [4, 5, 6])
+        plt.close()
+        
+        # Test machine learning
+        model = RandomForestClassifier(n_estimators=10)
+        X = [[1], [2], [3]]
+        y = [0, 1, 0]
+        model.fit(X, y)
+        
+        return jsonify({
+            'status': 'success',
+            'message': 'All analysis components are working',
+            'components_tested': {
+                'pandas': 'ok',
+                'matplotlib': 'ok',
+                'scikit-learn': 'ok'
+            }
+        })
+    except Exception as e:
+        return jsonify({
+            'status': 'error',
+            'message': str(e)
+        }), 500
+
 if __name__ == '__main__':
-    app.run() 
+    app.logger.info('Starting Flask server...')
+    app.run(host='0.0.0.0', port=5000, debug=True) 
