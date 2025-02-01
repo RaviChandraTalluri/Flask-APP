@@ -1,0 +1,95 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Data Analysis</title>
+    <link href="https://cdn.jsdelivr.net/npm/tailwindcss@2.2.19/dist/tailwind.min.css" rel="stylesheet">
+</head>
+<body class="bg-gray-100 p-8">
+    <div class="max-w-4xl mx-auto">
+        <h1 class="text-2xl font-bold mb-4">Data Analysis Dashboard</h1>
+        
+        <div class="bg-white p-6 rounded shadow">
+            <form id="uploadForm">
+                <input type="file" accept=".csv" id="fileInput" required>
+                <button type="submit" class="bg-blue-500 text-white px-4 py-2 rounded">
+                    Analyze
+                </button>
+            </form>
+        </div>
+
+        <div id="status" class="mt-4 hidden"></div>
+        <div id="results" class="mt-4"></div>
+    </div>
+
+    <script>
+        const API_URL = 'http://18.118.120.18:5000';
+
+        document.getElementById('uploadForm').addEventListener('submit', async (e) => {
+            e.preventDefault();
+            
+            const fileInput = document.getElementById('fileInput');
+            const resultsDiv = document.getElementById('results');
+            resultsDiv.innerHTML = '';
+            
+            if (!fileInput.files[0]) {
+                showStatus('Please select a file', 'error');
+                return;
+            }
+
+            showStatus('Analyzing data...');
+
+            const formData = new FormData();
+            formData.append('file', fileInput.files[0]);
+
+            try {
+                const response = await fetch(`${API_URL}/analyze`, {
+                    method: 'POST',
+                    body: formData,
+                    mode: 'cors',
+                    headers: {
+                        'Accept': 'application/json',
+                        'Origin': window.location.origin
+                    },
+                    credentials: 'omit'
+                });
+
+                if (!response.ok) {
+                    throw new Error(`HTTP error! status: ${response.status}`);
+                }
+
+                const data = await response.json();
+
+                if (data.status === 'error') {
+                    throw new Error(data.message);
+                }
+
+                showStatus('Analysis complete!');
+                displayResults(data.results);
+
+            } catch (error) {
+                console.error('Error:', error);
+                showStatus(`Error: ${error.message}`, 'error');
+            }
+        });
+
+        function displayResults(results) {
+            results.innerHTML = '';
+            results.forEach(result => {
+                const div = document.createElement('div');
+                div.className = 'bg-white p-4 rounded shadow mt-4';
+                
+                let content = `<h3 class="font-bold">${result.title}</h3>`;
+                if (result.text) {
+                    content += `<pre class="mt-2">${result.text}</pre>`;
+                }
+                if (result.plot) {
+                    content += `<img src="data:image/png;base64,${result.plot}" class="mt-2">`;
+                }
+                
+                div.innerHTML = content;
+                results.appendChild(div);
+            });
+        }
+    </script>
+</body>
+</html> 

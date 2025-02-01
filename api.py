@@ -1,4 +1,4 @@
-from flask import Flask, request, jsonify
+from flask import Flask, request, jsonify, render_template
 from flask_cors import CORS
 from werkzeug.utils import secure_filename
 import os
@@ -24,49 +24,69 @@ from flask_limiter import Limiter
 from flask_limiter.util import get_remote_address
 import redis
 from io import StringIO
+import werkzeug.exceptions
+import werkzeug
+from werkzeug.exceptions import ClientDisconnected
+
+# Update the upload directory configuration
+UPLOAD_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'uploads')
+LOG_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'logs')
 
 app = Flask(__name__, static_folder='static')
 CORS(app, resources={
     r"/*": {
-        "origins": "*",
-        "methods": ["GET", "POST", "OPTIONS"],
-        "allow_headers": ["Content-Type", "Authorization", "Accept"],
-        "supports_credentials": False
+        "origins": ["*"],
+        "methods": ["GET", "POST", "PUT", "DELETE", "OPTIONS"],
+        "allow_headers": ["Content-Type", "Authorization", "Accept", "Origin"],
+        "expose_headers": ["Content-Type", "Authorization"],
+        "supports_credentials": False,
+        "max_age": 120
     }
 })
-app.config['UPLOAD_FOLDER'] = 'uploads'
+
+# Update configuration with absolute paths
+app.config['UPLOAD_FOLDER'] = UPLOAD_DIR
 app.config['MAX_CONTENT_LENGTH'] = 16 * 1024 * 1024  # 16MB max file size
-app.secret_key = secrets.token_hex(32)  # Generate a secure secret key
+app.secret_key = secrets.token_hex(32)
 
-# Create uploads directory if it doesn't exist
-os.makedirs(app.config['UPLOAD_FOLDER'], exist_ok=True)
+# Create directories if they don't exist and set permissions
+try:
+    os.makedirs(UPLOAD_DIR, exist_ok=True)
+    os.makedirs(LOG_DIR, exist_ok=True)
+    # Ensure directories are writable
+    os.chmod(UPLOAD_DIR, 0o777)
+    os.chmod(LOG_DIR, 0o755)
+except Exception as e:
+    print(f"Error setting up directories: {str(e)}")
 
-# Configure logging
-if not os.path.exists('logs'):
-    os.makedirs('logs')
+# Configure logging with error handling
+try:
+    if not os.path.exists(LOG_DIR):
+        os.makedirs(LOG_DIR)
     
-handler = RotatingFileHandler('logs/api.log', maxBytes=10000, backupCount=3)
-handler.setFormatter(logging.Formatter(
-    '%(asctime)s %(levelname)s: %(message)s [in %(pathname)s:%(lineno)d]'
-))
-handler.setLevel(logging.INFO)
-app.logger.addHandler(handler)
-app.logger.setLevel(logging.INFO)
-app.logger.info('API startup')
+    log_file = os.path.join(LOG_DIR, 'api.log')
+    if not os.path.exists(log_file):
+        open(log_file, 'a').close()
+        os.chmod(log_file, 0o644)
+    
+    handler = RotatingFileHandler(log_file, maxBytes=10000, backupCount=3)
+    handler.setFormatter(logging.Formatter(
+        '%(asctime)s %(levelname)s: %(message)s [in %(pathname)s:%(lineno)d]'
+    ))
+    handler.setLevel(logging.INFO)
+    app.logger.addHandler(handler)
+    app.logger.setLevel(logging.INFO)
+    app.logger.info('API startup')
+except Exception as e:
+    print(f"Error setting up logging: {str(e)}")
 
-# Security headers
+# Update security headers
 @app.after_request
 def add_security_headers(response):
-    response.headers['Strict-Transport-Security'] = 'max-age=31536000; includeSubDomains'
-    response.headers['X-Content-Type-Options'] = 'nosniff'
-    response.headers['X-Frame-Options'] = 'SAMEORIGIN'
-    response.headers['X-XSS-Protection'] = '1; mode=block'
-    response.headers['Content-Security-Policy'] = "default-src * 'unsafe-inline' 'unsafe-eval'; img-src * data:;"
-    
-    # Ensure CORS headers are set
     response.headers['Access-Control-Allow-Origin'] = '*'
-    response.headers['Access-Control-Allow-Methods'] = 'GET, POST, OPTIONS'
-    response.headers['Access-Control-Allow-Headers'] = 'Content-Type, Authorization, Accept'
+    response.headers['Access-Control-Allow-Methods'] = 'GET, POST, PUT, DELETE, OPTIONS'
+    response.headers['Access-Control-Allow-Headers'] = 'Content-Type, Authorization, Accept, Origin'
+    response.headers['Access-Control-Max-Age'] = '120'
     return response
 
 # Update Redis configuration with fallback to in-memory storage
@@ -102,8 +122,7 @@ def ratelimit_handler(e):
 ALLOWED_EXTENSIONS = {'csv', 'xlsx', 'xls'}
 
 def allowed_file(filename):
-    return '.' in filename and \
-           filename.rsplit('.', 1)[1].lower() in ALLOWED_EXTENSIONS
+    return '.' in filename and filename.rsplit('.', 1)[1].lower() in ALLOWED_EXTENSIONS
 
 def fig_to_base64(fig):
     buf = io.BytesIO()
@@ -155,16 +174,202 @@ def home():
     })
 
 @app.route('/analyze', methods=['GET', 'POST'])
-@limiter.limit("30 per hour")
 def analyze():
     if request.method == 'GET':
-        # Handle GET request
-        return jsonify({"message": "GET request received"})
-    elif request.method == 'POST':
-        # Handle POST request
-        data = request.json
-        # Process the data
-        return jsonify({"message": "POST request received", "data": data})
+        return jsonify({"message": "Please send a POST request with a file to analyze"})
+    
+    try:
+        if 'file' not in request.files:
+            return jsonify({
+                'status': 'error',
+                'message': 'No file uploaded'
+            }), 400
+
+        file = request.files['file']
+        if file.filename == '':
+            return jsonify({
+                'status': 'error',
+                'message': 'No file selected'
+            }), 400
+
+        if not file.filename.endswith('.csv'):
+            return jsonify({
+                'status': 'error',
+                'message': 'Please upload a CSV file'
+            }), 400
+
+        filename = secure_filename(file.filename)
+        filepath = os.path.join(app.config['UPLOAD_FOLDER'], filename)
+        file.save(filepath)
+
+        try:
+            # Read and analyze the data
+            df = pd.read_csv(filepath)
+            results = []
+
+            # 1. Basic Dataset Information
+            total_rows = len(df)
+            total_cols = len(df.columns)
+            memory_usage = df.memory_usage(deep=True).sum() / 1024**2  # in MB
+            
+            results.append({
+                'type': 'info',
+                'title': 'Dataset Overview',
+                'text': f"Dataset contains {total_rows} rows and {total_cols} columns.\n"
+                       f"Memory Usage: {memory_usage:.2f} MB\n"
+                       f"Columns: {', '.join(df.columns.tolist())}"
+            })
+
+            # 2. Data Quality Analysis
+            missing_values = df.isnull().sum()
+            duplicates = df.duplicated().sum()
+            missing_percentage = (missing_values / len(df) * 100).round(2)
+            
+            quality_report = "Data Quality Report:\n"
+            quality_report += f"Total Duplicate Rows: {duplicates}\n"
+            quality_report += "\nMissing Values Analysis:\n"
+            for col in df.columns:
+                quality_report += f"{col}: {missing_values[col]} missing ({missing_percentage[col]}%)\n"
+
+            results.append({
+                'type': 'info',
+                'title': 'Data Quality Analysis',
+                'text': quality_report
+            })
+
+            # 3. Statistical Analysis for Numerical Columns
+            num_cols = df.select_dtypes(include=['int64', 'float64']).columns
+            if len(num_cols) > 0:
+                # Statistical Summary
+                stats = df[num_cols].describe()
+                skewness = df[num_cols].skew()
+                kurtosis = df[num_cols].kurtosis()
+                
+                stats_report = "Statistical Summary:\n"
+                stats_report += stats.to_string()
+                stats_report += "\n\nDistribution Metrics:\n"
+                stats_report += "\nSkewness (measure of distribution symmetry):\n"
+                stats_report += skewness.to_string()
+                stats_report += "\n\nKurtosis (measure of tail weight):\n"
+                stats_report += kurtosis.to_string()
+
+                results.append({
+                    'type': 'info',
+                    'title': 'Statistical Analysis',
+                    'text': stats_report
+                })
+
+                # Histograms
+                plt.figure(figsize=(12, 6))
+                df[num_cols].hist(bins=30)
+                plt.suptitle("Distribution of Numerical Variables")
+                plt.tight_layout()
+                
+                img_buf = io.BytesIO()
+                plt.savefig(img_buf, format='png', bbox_inches='tight')
+                img_buf.seek(0)
+                img_data = base64.b64encode(img_buf.read()).decode('utf-8')
+                plt.close()
+
+                results.append({
+                    'type': 'plot',
+                    'title': 'Numerical Distributions',
+                    'text': "Distribution histograms for numerical columns",
+                    'plot': img_data
+                })
+
+                # Box Plots
+                plt.figure(figsize=(12, 6))
+                df[num_cols].boxplot()
+                plt.xticks(rotation=45)
+                plt.title("Box Plots of Numerical Variables")
+                plt.tight_layout()
+                
+                img_buf = io.BytesIO()
+                plt.savefig(img_buf, format='png', bbox_inches='tight')
+                img_buf.seek(0)
+                img_data = base64.b64encode(img_buf.read()).decode('utf-8')
+                plt.close()
+
+                results.append({
+                    'type': 'plot',
+                    'title': 'Box Plots',
+                    'text': "Box plots showing distribution and outliers",
+                    'plot': img_data
+                })
+
+            # 4. Categorical Analysis
+            cat_cols = df.select_dtypes(include=['object']).columns
+            if len(cat_cols) > 0:
+                cat_summary = "Categorical Columns Analysis:\n\n"
+                for col in cat_cols:
+                    unique_count = df[col].nunique()
+                    top_values = df[col].value_counts().head(5)
+                    cat_summary += f"\n{col}:\n"
+                    cat_summary += f"Unique Values: {unique_count}\n"
+                    cat_summary += "Top 5 Values:\n"
+                    cat_summary += top_values.to_string()
+                    cat_summary += "\n"
+
+                results.append({
+                    'type': 'info',
+                    'title': 'Categorical Analysis',
+                    'text': cat_summary
+                })
+
+            # 5. Correlation Analysis
+            if len(num_cols) > 1:
+                correlation = df[num_cols].corr()
+                
+                plt.figure(figsize=(10, 8))
+                plt.imshow(correlation, cmap='coolwarm', aspect='auto')
+                plt.colorbar()
+                plt.xticks(range(len(num_cols)), num_cols, rotation=45)
+                plt.yticks(range(len(num_cols)), num_cols)
+                plt.title("Correlation Matrix")
+                
+                img_buf = io.BytesIO()
+                plt.savefig(img_buf, format='png', bbox_inches='tight')
+                img_buf.seek(0)
+                img_data = base64.b64encode(img_buf.read()).decode('utf-8')
+                plt.close()
+
+                # Add correlation insights
+                high_corr = []
+                for i in range(len(num_cols)):
+                    for j in range(i+1, len(num_cols)):
+                        corr_value = correlation.iloc[i, j]
+                        if abs(corr_value) > 0.7:
+                            high_corr.append(f"{num_cols[i]} & {num_cols[j]}: {corr_value:.2f}")
+
+                corr_text = "Correlation Analysis:\n"
+                if high_corr:
+                    corr_text += "\nStrong correlations (>0.7):\n" + "\n".join(high_corr)
+                else:
+                    corr_text += "\nNo strong correlations found between variables."
+
+                results.append({
+                    'type': 'plot',
+                    'title': 'Correlation Analysis',
+                    'text': corr_text,
+                    'plot': img_data
+                })
+
+            return jsonify({
+                'status': 'success',
+                'results': results
+            })
+
+        finally:
+            if os.path.exists(filepath):
+                os.remove(filepath)
+
+    except Exception as e:
+        app.logger.error(f"Error in analyze endpoint: {str(e)}")
+        return jsonify({
+            'status': 'error',
+            'message': str(e)
+        }), 500
 
 @app.route('/test', methods=['GET'])
 @limiter.limit("10 per minute")
@@ -187,18 +392,19 @@ def health_check():
                 redis_status = 'error'
         
         # Check if upload directory exists and is writable
+        upload_dir_status = 'ok'
         if not os.path.exists(app.config['UPLOAD_FOLDER']):
-            return jsonify({'status': 'error', 'message': 'Upload directory missing'}), 500
-        if not os.access(app.config['UPLOAD_FOLDER'], os.W_OK):
-            return jsonify({'status': 'error', 'message': 'Upload directory not writable'}), 500
+            upload_dir_status = 'missing'
+        elif not os.access(app.config['UPLOAD_FOLDER'], os.W_OK):
+            upload_dir_status = 'not writable'
             
         # Test matplotlib
         plt.figure()
         plt.close()
         
         return jsonify({
-            'status': 'healthy',
-            'upload_dir': 'ok',
+            'status': 'healthy' if upload_dir_status == 'ok' else 'error',
+            'upload_dir': upload_dir_status,
             'matplotlib': 'ok',
             'redis': redis_status,
             'version': '1.0',
@@ -380,6 +586,15 @@ def verify_analysis():
 def favicon():
     return '', 204  # Return a no-content response
 
+@app.route('/analysis')
+def analysis_page():
+    return render_template('dataanalysis.html')
+
 if __name__ == '__main__':
     app.logger.info('Starting Flask server...')
-    app.run(host='0.0.0.0', port=5000, debug=True) 
+    app.run(
+        host='0.0.0.0',  # Change this from specific IP to 0.0.0.0
+        port=5000,
+        debug=True,
+        threaded=True
+    )
