@@ -593,8 +593,8 @@ def analysis_page():
 if __name__ == '__main__':
     app.logger.info('Starting Flask server...')
     app.run(
-        host='0.0.0.0',  # Change this from specific IP to 0.0.0.0
-        port=5000,
-        debug=True,
+        host='0.0.0.0',  # Important: allows external access
+        port=5001,
+        debug=False,     # Set to False in production
         threaded=True
     )
