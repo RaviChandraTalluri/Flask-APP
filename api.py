@@ -154,194 +154,17 @@ def home():
         }
     })
 
-@app.route('/analyze', methods=['POST'])
+@app.route('/analyze', methods=['GET', 'POST'])
 @limiter.limit("30 per hour")
 def analyze():
-    try:
-        app.logger.info('Analysis request received')
-        
-        if 'file' not in request.files:
-            app.logger.warning('No file provided in request')
-            return jsonify({'error': 'No file provided'}), 400
-        
-        file = request.files['file']
-        if file.filename == '':
-            app.logger.warning('Empty filename provided')
-            return jsonify({'error': 'No file selected'}), 400
-        
-        if not allowed_file(file.filename):
-            app.logger.warning(f'Invalid file type: {file.filename}')
-            return jsonify({'error': 'File type not allowed'}), 400
-        
-        # Log file details
-        app.logger.info(f'Processing file: {file.filename}')
-        
-        try:
-            # Save file with unique name
-            filename = secure_filename(f"{datetime.now().strftime('%Y%m%d_%H%M%S')}_{file.filename}")
-            filepath = os.path.join(app.config['UPLOAD_FOLDER'], filename)
-            file.save(filepath)
-            app.logger.info(f'File saved to: {filepath}')
-            
-            # Load and verify data
-            df = load_data(filepath)
-            if df is None:
-                app.logger.error('Failed to load data from file')
-                return jsonify({'error': 'Failed to load data - invalid CSV format'}), 400
-            
-            app.logger.info(f'Data loaded successfully: {len(df)} rows, {len(df.columns)} columns')
-            
-            # Process data and generate results
-            results = []
-            
-            # Basic data summary
-            try:
-                df_info = io.StringIO()
-                df.info(buf=df_info)
-                summary_stats = df.describe().to_dict()
-                missing_values = df.isnull().sum().to_dict()
-                
-                results.append({
-                    'title': 'Dataset Overview',
-                    'insights': [
-                        f"Dataset contains {len(df)} rows and {len(df.columns)} columns",
-                        f"Column Information:\n{df_info.getvalue()}",
-                        f"Missing Values: {json.dumps(missing_values, indent=2)}"
-                    ]
-                })
-            except Exception as e:
-                app.logger.error(f'Error in data summary: {str(e)}')
-                
-            # Clean the data
-            df = clean_data(df)
-            
-            # Outlier Detection
-            numerical_cols = df.select_dtypes(include=['int64', 'float64']).columns
-            for col in numerical_cols[:5]:
-                fig = create_boxplot(df[col].dropna())
-                plt.title(f"Outlier Detection: {col}")
-                results.append({
-                    'title': f'Outlier Analysis - {col}',
-                    'visualization': fig_to_base64(fig),
-                    'insights': [
-                        "Boxplots highlight extreme values that could indicate potential errors or significant variations",
-                        "Points beyond the whiskers are considered outliers"
-                    ]
-                })
-                plt.close()
-            
-            # Data Distribution
-            plt.figure(figsize=(12, 6))
-            df.hist(bins=30, figsize=(12, 10), color='blue', alpha=0.7)
-            plt.suptitle("Distribution of Numerical Features")
-            results.append({
-                'title': 'Distribution Analysis',
-                'visualization': fig_to_base64(plt.gcf()),
-                'insights': [
-                    "Histograms provide a view of data distribution, identifying skewness or irregularities",
-                    "Helps identify patterns and potential data quality issues"
-                ]
-            })
-            plt.close()
-            
-            # Correlation Analysis
-            corr_matrix = df.corr(numeric_only=True)
-            fig = create_heatmap(corr_matrix)
-            plt.title("Feature Correlation Heatmap")
-            results.append({
-                'title': 'Correlation Analysis',
-                'visualization': fig_to_base64(fig),
-                'insights': [
-                    "Heatmap shows correlations between numerical variables",
-                    "Darker colors indicate stronger correlations"
-                ]
-            })
-            plt.close()
-            
-            # Classification Analysis (if applicable)
-            categorical_cols = df.select_dtypes(include=['object']).columns
-            if len(categorical_cols) > 0:
-                try:
-                    target = categorical_cols[-1]
-                    label_enc = LabelEncoder()
-                    df[target] = label_enc.fit_transform(df[target])
-                    features = df.select_dtypes(include=['int64', 'float64']).drop(columns=[target], errors='ignore')
-                    target_values = df[target]
-                    
-                    X_train, X_test, y_train, y_test = train_test_split(features, target_values, test_size=0.3, random_state=42)
-                    model = RandomForestClassifier()
-                    model.fit(X_train, y_train)
-                    y_pred = model.predict(X_test)
-                    
-                    results.append({
-                        'title': 'Classification Analysis',
-                        'insights': [
-                            f"Model Accuracy: {accuracy_score(y_test, y_pred):.2f}",
-                            f"Target Variable: {target}",
-                            "Classification model predicts categorical outcomes",
-                            "Useful for customer satisfaction or segmentation analysis"
-                        ]
-                    })
-                except Exception as e:
-                    print(f"Classification analysis failed: {str(e)}")
-            
-            # Time Series Analysis (if applicable)
-            date_cols = [col for col in df.columns if 'date' in col.lower()]
-            if date_cols:
-                try:
-                    df_copy = df.copy()
-                    df_copy[date_cols[0]] = pd.to_datetime(df_copy[date_cols[0]], errors='coerce')
-                    df_copy.dropna(subset=[date_cols[0]], inplace=True)
-                    df_copy.set_index(date_cols[0], inplace=True)
-                    df_copy.sort_index(inplace=True)
-                    
-                    target_col = df_copy.select_dtypes(include=['int64', 'float64']).columns[0]
-                    ts_data = df_copy[target_col].resample('M').sum()
-                    
-                    # ARIMA Forecasting
-                    model = ARIMA(ts_data, order=(5,1,0))
-                    model_fit = model.fit()
-                    forecast = model_fit.forecast(steps=12)
-                    
-                    plt.figure(figsize=(12, 6))
-                    plt.plot(ts_data.index, ts_data.values, label='Actual')
-                    plt.plot(pd.date_range(start=ts_data.index[-1], periods=12, freq='M'), 
-                            forecast, label='Forecast', linestyle='dashed')
-                    plt.title(f"Time Series Analysis: {target_col}")
-                    plt.legend()
-                    plt.xticks(rotation=45)
-                    
-                    results.append({
-                        'title': 'Time Series Analysis',
-                        'visualization': fig_to_base64(plt.gcf()),
-                        'insights': [
-                            "Time series plot shows temporal patterns in the data",
-                            "Dashed line shows forecasted values for next 12 periods",
-                            "Useful for identifying trends and seasonality"
-                        ]
-                    })
-                    plt.close()
-                except Exception as e:
-                    print(f"Time series analysis failed: {str(e)}")
-            
-            if not results:
-                raise ValueError('No analysis results generated')
-                
-            app.logger.info(f'Analysis completed successfully with {len(results)} sections')
-            return jsonify(results)
-            
-        except Exception as e:
-            app.logger.error(f'Error processing file: {str(e)}', exc_info=True)
-            return jsonify({'error': f'Error processing file: {str(e)}'}), 500
-        finally:
-            # Clean up
-            if os.path.exists(filepath):
-                os.remove(filepath)
-                app.logger.info(f'Cleaned up file: {filepath}')
-    
-    except Exception as e:
-        app.logger.error(f'Unexpected error: {str(e)}', exc_info=True)
-        return jsonify({'error': f'Unexpected error: {str(e)}'}), 500
+    if request.method == 'GET':
+        # Handle GET request
+        return jsonify({"message": "GET request received"})
+    elif request.method == 'POST':
+        # Handle POST request
+        data = request.json
+        # Process the data
+        return jsonify({"message": "POST request received", "data": data})
 
 @app.route('/test', methods=['GET'])
 @limiter.limit("10 per minute")
@@ -552,6 +375,10 @@ def verify_analysis():
             'status': 'error',
             'message': str(e)
         }), 500
+
+@app.route('/favicon.ico')
+def favicon():
+    return '', 204  # Return a no-content response
 
 if __name__ == '__main__':
     app.logger.info('Starting Flask server...')
